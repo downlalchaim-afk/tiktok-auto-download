@@ -2,6 +2,7 @@ const { execFile } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
+const FormData = require('form-data');
 
 const usernames = (process.env.TIKTOK_USERNAME || '')
   .split(',')
@@ -60,7 +61,10 @@ async function getLatestVideoUrl(username) {
   const url = res.stdout.trim().split('\n').filter(Boolean)[0];
 
   if (!url) return null;
-  if (url.startsWith('http')) return url;
+
+  if (url.startsWith('http')) {
+    return url;
+  }
 
   return `https://www.tiktok.com/@${username}/video/${url}`;
 }
@@ -84,9 +88,16 @@ async function downloadWithYtDlp(videoUrl, videoId, userDir) {
   ];
 
   const res = await runYtDlp(args);
-  const filePath = res.stdout.trim().split('\n').find(x => x.endsWith('.mp4'));
 
-  if (filePath && fs.existsSync(filePath)) return filePath;
+  const filePath = res.stdout
+    .trim()
+    .split('\n')
+    .find(x => x.endsWith('.mp4'));
+
+  if (filePath && fs.existsSync(filePath)) {
+    return filePath;
+  }
+
   return null;
 }
 
@@ -95,7 +106,7 @@ async function downloadFile(url, savePath) {
     method: 'GET',
     url,
     responseType: 'stream',
-    timeout: 60000,
+    timeout: 120000,
     headers: {
       'User-Agent': 'Mozilla/5.0'
     }
@@ -119,7 +130,7 @@ async function downloadWithFallback(videoUrl, videoId, userDir) {
       hd: '1'
     }),
     {
-      timeout: 60000,
+      timeout: 120000,
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
         'User-Agent': 'Mozilla/5.0'
@@ -128,15 +139,57 @@ async function downloadWithFallback(videoUrl, videoId, userDir) {
   );
 
   const data = response.data?.data;
+
   if (!data) return null;
 
-  const videoLink = data.hdplay || data.play || data.wmplay;
+  const videoLink =
+    data.hdplay ||
+    data.play ||
+    data.wmplay;
+
   if (!videoLink) return null;
 
   const savePath = path.join(userDir, `${videoId}.mp4`);
+
   await downloadFile(videoLink, savePath);
 
-  return fs.existsSync(savePath) ? savePath : null;
+  if (fs.existsSync(savePath)) {
+    return savePath;
+  }
+
+  return null;
+}
+
+async function sendToTelegram(filePath, username, videoId) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+
+  if (!token || !chatId) {
+    console.log('Telegram secret belum diisi');
+    return;
+  }
+
+  const form = new FormData();
+
+  form.append('chat_id', chatId);
+  form.append(
+    'caption',
+    `Video baru dari @${username}\nID: ${videoId}`
+  );
+  form.append('video', fs.createReadStream(filePath));
+
+  await axios.post(
+    `https://api.telegram.org/bot${token}/sendVideo`,
+    form,
+    {
+      headers: form.getHeaders(),
+      maxBodyLength: Infinity,
+      maxContentLength: Infinity,
+      timeout: 120000
+    }
+  );
+
+  console.log(`@${username}: video terkirim ke Telegram`);
 }
 
 async function processUsername(username) {
@@ -150,14 +203,14 @@ async function processUsername(username) {
   const videoUrl = await getLatestVideoUrl(username);
 
   if (!videoUrl) {
-    console.log(`@${username}: tidak menemukan video terbaru`);
+    console.log(`@${username}: tidak menemukan video`);
     return;
   }
 
   const videoId = getVideoId(videoUrl);
 
   if (!videoId) {
-    console.log(`@${username}: tidak bisa membaca video ID`);
+    console.log(`@${username}: gagal baca video ID`);
     return;
   }
 
@@ -166,18 +219,30 @@ async function processUsername(username) {
     return;
   }
 
-  let filePath = await downloadWithYtDlp(videoUrl, videoId, userDir);
+  let filePath = await downloadWithYtDlp(
+    videoUrl,
+    videoId,
+    userDir
+  );
 
   if (!filePath) {
-    filePath = await downloadWithFallback(videoUrl, videoId, userDir);
+    filePath = await downloadWithFallback(
+      videoUrl,
+      videoId,
+      userDir
+    );
   }
 
-  if (filePath) {
-    markDownloaded(archiveFile, videoId);
-    console.log(`@${username}: downloaded ${filePath}`);
-  } else {
-    console.log(`@${username}: gagal download video terbaru`);
+  if (!filePath) {
+    console.log(`@${username}: gagal download`);
+    return;
   }
+
+  await sendToTelegram(filePath, username, videoId);
+
+  markDownloaded(archiveFile, videoId);
+
+  console.log(`@${username}: selesai`);
 }
 
 async function main() {
@@ -185,7 +250,7 @@ async function main() {
     try {
       await processUsername(username);
     } catch (err) {
-      console.log(`@${username}: error ${err.message}`);
+      console.log(`@${username}: ${err.message}`);
     }
   }
 }
