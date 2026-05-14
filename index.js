@@ -3,19 +3,17 @@ const fs = require('fs');
 const path = require('path');
 const axios = require('axios');
 
-const username = process.env.TIKTOK_USERNAME;
+const usernames = (process.env.TIKTOK_USERNAME || '')
+  .split(',')
+  .map(u => u.trim().replace('@', ''))
+  .filter(Boolean);
+
 const downloadDir = process.env.DOWNLOAD_DIR || 'downloads';
 
-if (!username) {
+if (usernames.length === 0) {
   console.error('TIKTOK_USERNAME belum diisi');
   process.exit(1);
 }
-
-const profileUrl = `https://www.tiktok.com/@${username}`;
-const userDir = path.join(downloadDir, username);
-const archiveFile = path.join(downloadDir, `${username}.txt`);
-
-fs.mkdirSync(userDir, { recursive: true });
 
 function runYtDlp(args) {
   return new Promise(resolve => {
@@ -32,12 +30,12 @@ function runYtDlp(args) {
   });
 }
 
-function isDownloaded(videoId) {
+function isDownloaded(archiveFile, videoId) {
   if (!fs.existsSync(archiveFile)) return false;
   return fs.readFileSync(archiveFile, 'utf8').includes(videoId);
 }
 
-function markDownloaded(videoId) {
+function markDownloaded(archiveFile, videoId) {
   fs.appendFileSync(archiveFile, `${videoId}\n`);
 }
 
@@ -46,7 +44,9 @@ function getVideoId(videoUrl) {
   return match ? match[1] : null;
 }
 
-async function getLatestVideoUrl() {
+async function getLatestVideoUrl(username) {
+  const profileUrl = `https://www.tiktok.com/@${username}`;
+
   const args = [
     profileUrl,
     '--playlist-items', '1',
@@ -65,16 +65,22 @@ async function getLatestVideoUrl() {
   return `https://www.tiktok.com/@${username}/video/${url}`;
 }
 
-async function downloadWithYtDlp(videoUrl, videoId) {
+async function downloadWithYtDlp(videoUrl, videoId, userDir) {
   const args = [
     videoUrl,
     '--no-playlist',
     '--no-overwrites',
     '--quiet',
     '--no-warnings',
-    '-f', 'b[ext=mp4]/best[ext=mp4]/best',
-    '--print', 'after_move:filepath',
-    '-o', path.join(userDir, `${videoId}.%(ext)s`)
+
+    '-f',
+    'b[ext=mp4]/best[ext=mp4]/best',
+
+    '--print',
+    'after_move:filepath',
+
+    '-o',
+    path.join(userDir, `${videoId}.%(ext)s`)
   ];
 
   const res = await runYtDlp(args);
@@ -90,7 +96,9 @@ async function downloadFile(url, savePath) {
     url,
     responseType: 'stream',
     timeout: 60000,
-    headers: { 'User-Agent': 'Mozilla/5.0' }
+    headers: {
+      'User-Agent': 'Mozilla/5.0'
+    }
   });
 
   await new Promise((resolve, reject) => {
@@ -103,7 +111,7 @@ async function downloadFile(url, savePath) {
   return savePath;
 }
 
-async function downloadWithFallback(videoUrl, videoId) {
+async function downloadWithFallback(videoUrl, videoId, userDir) {
   const response = await axios.post(
     'https://www.tikwm.com/api/',
     new URLSearchParams({
@@ -131,41 +139,55 @@ async function downloadWithFallback(videoUrl, videoId) {
   return fs.existsSync(savePath) ? savePath : null;
 }
 
-async function main() {
-  const videoUrl = await getLatestVideoUrl();
+async function processUsername(username) {
+  const userDir = path.join(downloadDir, username);
+  const archiveFile = path.join(downloadDir, `${username}.txt`);
+
+  fs.mkdirSync(userDir, { recursive: true });
+
+  console.log(`Checking @${username}`);
+
+  const videoUrl = await getLatestVideoUrl(username);
 
   if (!videoUrl) {
-    console.log('Tidak menemukan video terbaru');
+    console.log(`@${username}: tidak menemukan video terbaru`);
     return;
   }
 
   const videoId = getVideoId(videoUrl);
 
   if (!videoId) {
-    console.log('Tidak bisa membaca video ID');
+    console.log(`@${username}: tidak bisa membaca video ID`);
     return;
   }
 
-  if (isDownloaded(videoId)) {
-    console.log('Tidak ada video baru');
+  if (isDownloaded(archiveFile, videoId)) {
+    console.log(`@${username}: tidak ada video baru`);
     return;
   }
 
-  let filePath = await downloadWithYtDlp(videoUrl, videoId);
+  let filePath = await downloadWithYtDlp(videoUrl, videoId, userDir);
 
   if (!filePath) {
-    filePath = await downloadWithFallback(videoUrl, videoId);
+    filePath = await downloadWithFallback(videoUrl, videoId, userDir);
   }
 
   if (filePath) {
-    markDownloaded(videoId);
-    console.log(`Downloaded: ${filePath}`);
+    markDownloaded(archiveFile, videoId);
+    console.log(`@${username}: downloaded ${filePath}`);
   } else {
-    console.log('Gagal download video terbaru');
+    console.log(`@${username}: gagal download video terbaru`);
   }
 }
 
-main().catch(err => {
-  console.error(err.message);
-  process.exit(1);
-});
+async function main() {
+  for (const username of usernames) {
+    try {
+      await processUsername(username);
+    } catch (err) {
+      console.log(`@${username}: error ${err.message}`);
+    }
+  }
+}
+
+main();
