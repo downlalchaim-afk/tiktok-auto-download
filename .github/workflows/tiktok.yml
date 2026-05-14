@@ -22,13 +22,10 @@ jobs:
         with:
           node-version: 20
 
-      - name: Install system tools
+      - name: Install tools
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg python3-pip
-
-      - name: Install yt-dlp
-        run: |
           python3 -m pip install -U "yt-dlp[default]" --break-system-packages
 
       - name: Install npm dependencies
@@ -36,19 +33,19 @@ jobs:
 
       - name: Run downloader
         env:
-          TIKTOK_USERNAME: anugerah5841
+          TIKTOK_USERNAME: ${{ secrets.TIKTOK_USERNAME }}
           DOWNLOAD_DIR: downloads
         run: npm start
 
-      - name: Commit archive file
+      - name: Commit archive
         run: |
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
           git add downloads/*.txt
-          git commit -m "update downloaded archive" || echo "No archive changes"
+          git commit -m "update archive" || echo "No archive changes"
           git push
 
-      - name: Upload downloaded videos
+      - name: Upload video artifact
         uses: actions/upload-artifact@v4
         with:
           name: tiktok-videos
