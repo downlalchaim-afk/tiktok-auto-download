@@ -3,7 +3,7 @@ name: TikTok Auto Download
 on:
   workflow_dispatch:
   schedule:
-    - cron: "7,37 * * * *"
+    - cron: "10,40 * * * *"
 
 permissions:
   contents: write
