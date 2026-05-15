@@ -5,52 +5,10 @@ on:
   schedule:
     - cron: "*/5 * * * *"
 
-permissions:
-  contents: write
-  actions: read
-
 jobs:
-  download:
+  test:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 20
-
-      - name: Install system tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg python3-pip
-          python3 -m pip install -U "yt-dlp[default]" --break-system-packages
-
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Run TikTok downloader
-        env:
-          TIKTOK_USERNAME: ${{ secrets.TIKTOK_USERNAME }}
-          DOWNLOAD_DIR: downloads
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: node index.js
-
-      - name: Commit archive files
-        run: |
-          git config user.name "github-actions"
-          git config user.email "github-actions@github.com"
-          git add downloads/*.txt || true
-          git commit -m "update archive" || echo "No archive changes"
-          git push
-
-      - name: Upload downloaded videos
-        uses: actions/upload-artifact@v4
-        with:
-          name: tiktok-videos
-          path: downloads/**/*.mp4
-          if-no-files-found: ignore
-          retention-days: 3
+      - name: Test scheduler
+        run: echo "Scheduled run working at $(date)"
