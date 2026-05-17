@@ -31,6 +31,43 @@ function runYtDlp(args) {
   });
 }
 
+// Fungsi Baru: Memproses video agar unik menggunakan FFmpeg
+function makeVideoUnique(inputPath, outputPath) {
+  return new Promise(resolve => {
+    // Trik Anti-Duplikat:
+    // 1. Mirror video secara horizontal (hflip)
+    // 2. Naikkan kecepatan video tipis (1.02x) agar durasi berubah sedikit
+    // 3. Naikkan pitch audio agar selaras dengan kecepatan baru (atempo=1.02)
+    // 4. Hapus semua metadata asli (-map_metadata -1)
+    const args = [
+      '-y',
+      '-i', inputPath,
+      '-vf', 'hflip,setpts=0.9803*PTS',
+      '-af', 'atempo=1.02',
+      '-map_metadata', '-1',
+      outputPath
+    ];
+
+    const child = execFile('ffmpeg', args, { windowsHide: true });
+
+    let stderr = '';
+    child.stderr.on('data', d => stderr += d.toString());
+
+    child.on('close', code => {
+      if (code === 0 && fs.existsSync(outputPath)) {
+        resolve(outputPath);
+      } else {
+        console.error('FFmpeg error:', stderr);
+        resolve(null);
+      }
+    });
+    child.on('error', err => {
+      console.error('FFmpeg process error:', err.message);
+      resolve(null);
+    });
+  });
+}
+
 function isDownloaded(archiveFile, videoId) {
   if (!fs.existsSync(archiveFile)) return false;
   return fs.readFileSync(archiveFile, 'utf8').includes(videoId);
@@ -174,7 +211,7 @@ async function sendToTelegram(filePath, username, videoId) {
   form.append('chat_id', chatId);
   form.append(
     'caption',
-    `Video baru dari @${username}\nID: ${videoId}`
+    `Video unik baru dari @${username}\nID: ${videoId}`
   );
   form.append('video', fs.createReadStream(filePath));
 
@@ -189,7 +226,7 @@ async function sendToTelegram(filePath, username, videoId) {
     }
   );
 
-  console.log(`@${username}: video terkirim ke Telegram`);
+  console.log(`@${username}: video unik terkirim ke Telegram`);
 }
 
 async function processUsername(username) {
@@ -238,7 +275,28 @@ async function processUsername(username) {
     return;
   }
 
-  await sendToTelegram(filePath, username, videoId);
+  // --- PROSES MODIFIKASI ANTI-DUPLIKAT ---
+  const uniqueFilePath = path.join(userDir, `unique_${videoId}.mp4`);
+  console.log(`@${username}: Sedang memproses video agar lolos algoritma reupload...`);
+  
+  const processedPath = await makeVideoUnique(filePath, uniqueFilePath);
+  
+  if (processedPath) {
+    // Kirim video yang sudah dimodifikasi (unik) ke Telegram
+    await sendToTelegram(processedPath, username, videoId);
+    
+    // Hapus kedua file agar penyimpanan Runner GitHub Actions tidak penuh
+    try {
+      fs.unlinkSync(filePath);       // Hapus video original mentah
+      fs.unlinkSync(processedPath);  // Hapus video unik
+    } catch (e) {}
+  } else {
+    // Jika FFmpeg gagal karena alasan tertentu, kirim video original sebagai cadangan
+    console.log(`@${username}: Gagal membuat video unik. Mengirim video asli...`);
+    await sendToTelegram(filePath, username, videoId);
+    try { fs.unlinkSync(filePath); } catch (e) {}
+  }
+  // ---------------------------------------
 
   markDownloaded(archiveFile, videoId);
 
